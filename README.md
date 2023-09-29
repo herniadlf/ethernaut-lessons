@@ -89,3 +89,14 @@ function price() external view returns (uint) {
         return 150;
     }
 ```
+
+## Dex
+
+Acá basicamente hay que engañar al DEX para llevarme toda la liquidez de alguno de los dos tokens. Se me ocurren algunas ideas:
+
+- Por lo que voy probando, al no tener manejo de decimales el dex, se puede empezar a descontrolar el precio cuando me queden precios con coma. Por ejemplo, cuando me quede un precio de 2,4 el contrato siempre redondea a 2.
+- Jugando un poco con los swaps, pude conseguir sacar toda la liquidez de uno de los tokens.
+
+# DexTwo
+
+- Acá al no haber un require de que el `from` o el `to` sean los tokens que tienen liquidez en el dex, puedo crear un erc20 falopa, transferirle liquidez al dex y swapear para que el precio se calcule a partir del erc20 falopa.
