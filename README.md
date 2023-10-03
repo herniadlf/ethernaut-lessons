@@ -100,3 +100,11 @@ Acá basicamente hay que engañar al DEX para llevarme toda la liquidez de algun
 # DexTwo
 
 - Acá al no haber un require de que el `from` o el `to` sean los tokens que tienen liquidez en el dex, puedo crear un erc20 falopa, transferirle liquidez al dex y swapear para que el precio se calcule a partir del erc20 falopa.
+
+# PuzzleWallet
+
+- Algo interesante es que el proxy utilizado tiene dos variables `address` y el puzzleWallet tiene en el primer slot un `address owner` y en el segundo el `uint maxBalance`. Por como se maneja eso en el delagateCall, yo llamé al método proposeNewAdmin que lo que hace es escribir en la primer ubicación de memoria el address que viene por parámetro. Sin embargo, eso en el contrato PuzzleWallet representa el owner, por lo tanto, con eso ya me pude asignar el ownership de la wallet y agregarme a la famosa whitelist para operar contra el contrato.
+- Me resta sobreescribir el segundo slot, que para PuzzleWallet es un uint256 que representa el balance, pero para el proxy es el admin. Pero para cambiar el MaxBalance, el contrato no debe tener fondos. Entonces, debo realizar un execute que ejecute una transferencia desde el contrato hacia mi address.
+- Para hacer ese execute, mi address debe tener depositado el valor que quiero extraer. Inicialmente el contrato tiene 0.001 de balance, pero al hacer un deposit de 0.001 que me permita extraerlo, el contrato tendrá 0.002. Es por esto que tengo que hacer un deposit, y un multicall haciendo un segundo deposit. De esta manera, mi address tiene "acceso" a utilizar 0.002 de value del contrato.
+- Hecho el deposit, ya puedo llamar desde mi addres a un execute que haga una transferencia desde el contrato a mi address, drenando los fondos.
+- Una vez drenados, solo me queda llamar al maxBalance con mi address, con lo que reemplazaré el admin del proxy (además del maxBalance de la implementación).
